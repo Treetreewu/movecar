@@ -27,7 +27,7 @@ async function handleRequest(request) {
       status: status || 'waiting',
       ownerLocation: ownerLocation ? JSON.parse(ownerLocation) : null
     }), {
-      headers: { 'Content-Type': 'application/json' }
+      headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' }
     });
   }
 
@@ -91,7 +91,7 @@ async function handleNotify(request, url) {
     const location = body.location || null;
     const delayed = body.delayed || false;
 
-    const confirmUrl = encodeURIComponent(url.origin + '/owner-confirm');
+    const confirmUrl = url.origin + '/owner-confirm';
 
     let notifyBody = '🚗 挪车请求';
     if (message) notifyBody += `\\n💬 留言: ${message}`;
@@ -109,17 +109,14 @@ async function handleNotify(request, url) {
       notifyBody += '\\n⚠️ 未提供位置信息';
     }
 
-    await MOVE_CAR_STATUS.put('notify_status', 'waiting', { expirationTtl: 600 });
+    await MOVE_CAR_STATUS.put('notify_status', 'waiting', { expirationTtl: 900 });
 
     // 如果是延迟发送，等待30秒
     if (delayed) {
       await new Promise(resolve => setTimeout(resolve, 30000));
     }
 
-    const barkApiUrl = `${BARK_URL}/挪车请求/${encodeURIComponent(notifyBody)}?group=MoveCar&level=critical&call=1&sound=minuet&icon=https://cdn-icons-png.flaticon.com/512/741/741407.png&url=${confirmUrl}`;
-
-    const barkResponse = await fetch(barkApiUrl);
-    if (!barkResponse.ok) throw new Error('Bark API Error');
+    await sendNotification({ message: notifyBody, confirmUrl });
 
     return new Response(JSON.stringify({ success: true }), {
       headers: { 'Content-Type': 'application/json' }
@@ -152,12 +149,12 @@ async function handleOwnerConfirmAction(request) {
       }), { expirationTtl: CONFIG.KV_TTL });
     }
 
-    await MOVE_CAR_STATUS.put('notify_status', 'confirmed', { expirationTtl: 600 });
+    await MOVE_CAR_STATUS.put('notify_status', 'confirmed', { expirationTtl: 900 });
     return new Response(JSON.stringify({ success: true }), {
       headers: { 'Content-Type': 'application/json' }
     });
   } catch (error) {
-    await MOVE_CAR_STATUS.put('notify_status', 'confirmed', { expirationTtl: 600 });
+    await MOVE_CAR_STATUS.put('notify_status', 'confirmed', { expirationTtl: 900 });
     return new Response(JSON.stringify({ success: true }), {
       headers: { 'Content-Type': 'application/json' }
     });
@@ -165,7 +162,6 @@ async function handleOwnerConfirmAction(request) {
 }
 
 function renderMainPage(origin) {
-  const phone = typeof PHONE_NUMBER !== 'undefined' ? PHONE_NUMBER : '';
 
   const html = `
   <!DOCTYPE html>
@@ -454,7 +450,7 @@ function renderMainPage(origin) {
         color: #718096;
         margin-bottom: 4px;
       }
-      .btn-retry, .btn-phone {
+      .btn-retry, .btn-secondary {
         color: white;
         border: none;
         padding: clamp(14px, 3.5vw, 18px);
@@ -480,11 +476,11 @@ function renderMainPage(origin) {
         box-shadow: none;
         cursor: not-allowed;
       }
-      .btn-phone {
+      .btn-secondary {
         background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%);
         box-shadow: 0 8px 24px rgba(239, 68, 68, 0.3);
       }
-      .btn-phone:active { transform: scale(0.98); }
+      .btn-secondary:active { transform: scale(0.98); }
 
       @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
       .loading-text { animation: pulse 1.5s ease-in-out infinite; }
@@ -657,7 +653,7 @@ function renderMainPage(origin) {
         <div class="tags">
           <div class="tag" onclick="addTag('您的车挡住我了')">🚧 挡路</div>
           <div class="tag" onclick="addTag('临时停靠一下')">⏱️ 临停</div>
-          <div class="tag" onclick="addTag('电话打不通')">📞 没接</div>
+          <div class="tag" onclick="addTag('车旁有人等待')">⏳ 等候中</div>
           <div class="tag" onclick="addTag('麻烦尽快')">🙏 加急</div>
         </div>
       </div>
@@ -694,25 +690,69 @@ function renderMainPage(origin) {
       </div>
 
       <div class="card action-card">
-        <p class="action-hint">车主没反应？试试其他方式</p>
+        <p class="action-hint">车主暂未回应，可以再次通知</p>
         <button id="retryBtn" class="btn-retry" onclick="retryNotify()">
           <span>🔔</span>
           <span>再次通知</span>
         </button>
-        <a href="tel:${phone}" class="btn-phone">
-          <span>📞</span>
-          <span>直接打电话</span>
-        </a>
+        <div id="followUpActions"></div>
       </div>
     </div>
 
     <script>
       let userLocation = null;
       let checkTimer = null;
+      let followUpTimer = null;
+      let followUpGeneration = 0;
 
-      // 页面加载时显示提示弹窗
-      window.onload = () => {
-        showModal('locationTipModal');
+      function resetFollowUp() {
+        clearTimeout(followUpTimer);
+        followUpGeneration++;
+        document.getElementById('followUpActions').replaceChildren();
+      }
+
+      function scheduleFollowUp(delay = 60000) {
+        const generation = followUpGeneration;
+        let attempts = 0;
+        async function refresh() {
+          if (generation !== followUpGeneration) return;
+          attempts++;
+          try {
+            const response = await fetch('/api/follow-up', { cache: 'no-store' });
+            const data = await response.json();
+            if (generation !== followUpGeneration) return;
+            if (typeof data.html === 'string' && data.html) {
+              document.getElementById('followUpActions').innerHTML = data.html;
+              return;
+            }
+          } catch (e) {}
+          if (generation === followUpGeneration && attempts < 12) followUpTimer = setTimeout(refresh, 5000);
+        }
+        followUpTimer = setTimeout(refresh, delay);
+      }
+
+      // Use the server session to resume without sending another notification.
+      window.onload = async () => {
+        const mainView = document.getElementById('mainView');
+        mainView.style.visibility = 'hidden';
+        try {
+          const response = await fetch('/api/session', { cache: 'no-store' });
+          if (!response.ok) throw new Error('Unable to restore session');
+          const session = await response.json();
+          if (session.active) {
+            mainView.style.display = 'none';
+            document.getElementById('successView').style.display = 'flex';
+            applyStatus(session);
+            startPolling();
+            scheduleFollowUp(Math.max(0, 60000 - session.elapsedMs));
+            return;
+          }
+          showModal('locationTipModal');
+        } catch (error) {
+          showToast('暂时无法读取请求状态，请刷新重试');
+        } finally {
+          mainView.style.visibility = 'visible';
+        }
       };
 
       function showModal(id) {
@@ -760,6 +800,7 @@ function renderMainPage(origin) {
 
       // 发送通知
       async function sendNotify() {
+        resetFollowUp();
         const btn = document.getElementById('notifyBtn');
         const msg = document.getElementById('msgInput').value;
         const delayed = !userLocation; // 无位置则延迟
@@ -783,6 +824,7 @@ function renderMainPage(origin) {
             document.getElementById('mainView').style.display = 'none';
             document.getElementById('successView').style.display = 'flex';
             startPolling();
+            scheduleFollowUp();
           } else {
             throw new Error('API Error');
           }
@@ -793,17 +835,12 @@ function renderMainPage(origin) {
         }
       }
 
-      function startPolling() {
-        let count = 0;
-        checkTimer = setInterval(async () => {
-          count++;
-          if (count > 120) { clearInterval(checkTimer); return; }
-          try {
-            const res = await fetch('/api/check-status');
-            const data = await res.json();
-            if (data.status === 'confirmed') {
+      function applyStatus(data) {
+        if (data.status === 'confirmed') {
               const fb = document.getElementById('ownerFeedback');
+              const wasHidden = fb.classList.contains('hidden');
               fb.classList.remove('hidden');
+              document.getElementById('waitingText').innerText = '车主已确认，正在赶来';
 
               if (data.ownerLocation && data.ownerLocation.amapUrl) {
                 document.getElementById('ownerMapLinks').style.display = 'flex';
@@ -811,11 +848,25 @@ function renderMainPage(origin) {
                 document.getElementById('ownerAppleLink').href = data.ownerLocation.appleUrl;
               }
 
-              clearInterval(checkTimer);
-              if(navigator.vibrate) navigator.vibrate([200, 100, 200]);
-            }
+              if(wasHidden && navigator.vibrate) navigator.vibrate([200, 100, 200]);
+        }
+      }
+
+      function startPolling() {
+        clearInterval(checkTimer);
+        let count = 0;
+        async function refreshStatus() {
+          if (++count > 300) { clearInterval(checkTimer); return; }
+          try {
+            const res = await fetch('/api/check-status', { cache: 'no-store' });
+            if (!res.ok) return;
+            const data = await res.json();
+            applyStatus(data);
+            if (data.status === 'confirmed') clearInterval(checkTimer);
           } catch(e) {}
-        }, 3000);
+        }
+        checkTimer = setInterval(refreshStatus, 3000);
+        refreshStatus();
       }
 
       function showToast(text) {

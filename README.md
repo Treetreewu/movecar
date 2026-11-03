@@ -1,174 +1,61 @@
-﻿# MoveCar - 挪车通知系统
+# MoveCar · 挪车通知
 
-基于 Cloudflare Workers 的智能挪车通知系统，扫码即可通知车主，保护双方隐私。
+基于 [lesnolie/movecar](https://github.com/lesnolie/movecar) 的个人定制 fork。访客扫描二维码或触碰 NFC 标签后，可以留言通知车主，并查看车主确认状态。
 
-## 界面预览
+使用 Cloudflare Pages Functions（Worker advanced mode）和 KV，通过 Wrangler CLI 部署。保留上游的页面和位置共享功能，补充通知、隐私与刷新恢复逻辑。
 
-| 请求者页面 | 车主页面 |
-|:---:|:---:|
-| [🔗 在线预览](https://htmlpreview.github.io/?https://github.com/lesnolie/movecar/blob/main/preview-requester.html) | [🔗 在线预览](https://htmlpreview.github.io/?https://github.com/lesnolie/movecar/blob/main/preview-owner.html) |
+## 定制内容
 
-## 为什么需要它？
+- **多种通知渠道**：支持 PushPlus 微信、Server酱³、Bark；凭证通过 Cloudflare Secrets 配置。检查推送服务返回的业务状态，未配置时不会显示发送成功。
+- **延迟开放备用电话**：第一次通知发送成功后，由服务器计时 60 秒；此前页面源码和接口响应不包含号码，也不显示电话按钮、倒计时或电话功能提示。满一分钟后才返回拨号入口。
+- **再次通知不重置计时**：同一有效会话内沿用第一次成功发送的时间，已显示的入口也不会被隐藏。
+- **刷新恢复**：在同一浏览器、同一网址下，15 分钟内刷新可恢复等待或确认状态，继续查询车主回复；不会自动重新发送通知，也不会重置一分钟计时。
+- **会话校验**：签名、HttpOnly、Secure Cookie；提前请求或篡改凭证无法绕过服务器的时间判断。
+- **回归测试**：覆盖推送失败、时间边界、凭证篡改、再次通知和刷新恢复。
 
-- 🚗 **被堵车却找不到车主** - 干着急没办法
-- 📱 **传统挪车码暴露电话** - 隐私泄露、骚扰电话不断
-- 😈 **恶意扫码骚扰** - 有人故意反复扫码打扰
-- 🤔 **路人好奇扫码** - 并不需要挪车却触发通知
+## 快速开始
 
-## 这个系统如何解决？
+需要 Node.js 22+、Wrangler CLI 和 Cloudflare 账号。
 
-- ✅ **不暴露电话号码** - 通过推送通知联系，保护隐私
-- ✅ **双向位置共享** - 车主可确认请求者确实在车旁
-- ✅ **无位置延迟 30 秒** - 降低恶意骚扰的动力
-- ✅ **免费部署** - Cloudflare Workers 免费额度完全够用
-- ✅ **无需服务器** - Serverless 架构，零运维成本
-
-## 为什么使用 Bark 推送？
-
-- 🔔 支持「紧急 / 重要 / 警告」通知级别
-- 🎵 可自定义通知音效
-- 🌙 **即使开启勿扰模式也能收到提醒**
-- 📱 安卓用户：原理相通，将 Bark 替换为安卓推送服务即可（如 Pushplus、Server酱）
-
-## 使用流程
-
-### 请求者（需要挪车的人）
-
-1. 扫描车上的二维码，进入通知页面
-2. 填写留言（可选），如「挡住出口了」
-3. 允许获取位置（不允许则延迟 30 秒发送）
-4. 点击「通知车主」
-5. 等待车主确认，可查看车主位置
-
-### 车主
-
-1. 收到 Bark 推送通知
-2. 点击通知进入确认页面
-3. 查看请求者位置（判断是否真的在车旁）
-4. 点击确认，分享自己位置给对方
-
-### 流程图
-
-```
-请求者                              车主
-  │                                  │
-  ├─ 扫码进入页面                     │
-  ├─ 填写留言、获取位置                │
-  ├─ 点击发送                         │
-  │   ├─ 有位置 → 立即推送 ──────────→ 收到通知
-  │   └─ 无位置 → 30秒后推送 ────────→ 收到通知
-  │                                  │
-  ├─ 等待中...                        ├─ 查看请求者位置
-  │                                  ├─ 点击确认，分享位置
-  │                                  │
-  ├─ 收到确认，查看车主位置 ←──────────┤
-  │                                  │
-  ▼                                  ▼
+```sh
+git clone https://github.com/Treetreewu/movecar.git
+cd movecar
+npm install -g wrangler
+wrangler login
+wrangler kv namespace create MOVE_CAR_STATUS
 ```
 
-## 部署教程
+将 `wrangler.example.jsonc` 复制为 `wrangler.jsonc`，填入刚创建的 KV namespace ID。实际配置文件已被 Git 忽略。
 
-### 第一步：注册 Cloudflare 账号
-
-1. 打开 https://dash.cloudflare.com/sign-up
-2. 输入邮箱和密码，完成注册
-
-### 第二步：创建 Worker
-
-1. 登录后点击左侧菜单「Workers & Pages」
-2. 点击「Create」→「Create Worker」
-3. 名称填 `movecar`（或你喜欢的名字）
-4. 点击「Deploy」
-5. 点击「Edit code」，删除默认代码
-6. 复制 `movecar.js` 全部内容粘贴进去
-7. 点击右上角「Deploy」保存
-
-### 第三步：创建 KV 存储
-
-1. 左侧菜单点击「KV」
-2. 点击「Create a namespace」
-3. 名称填 `MOVE_CAR_STATUS`，点击「Add」
-4. 回到你的 Worker →「Settings」→「Bindings」
-5. 点击「Add」→「KV Namespace」
-6. Variable name 填 `MOVE_CAR_STATUS`
-7. 选择刚创建的 namespace，点击「Deploy」
-
-### 第四步：配置环境变量
-
-1. Worker →「Settings」→「Variables and Secrets」
-2. 添加以下变量：
-   - `BARK_URL`：你的 Bark 推送地址（如 `https://api.day.app/xxxxx`）
-   - `PHONE_NUMBER`：备用联系电话（可选）
-
-### 第五步：绑定域名（可选）
-
-1. Worker →「Settings」→「Domains & Routes」
-2. 点击「Add」→「Custom Domain」
-3. 输入你的域名，按提示完成 DNS 配置
-
-## 制作挪车码
-
-### 生成二维码
-
-1. 复制你的 Worker 地址（如 `https://movecar.你的账号.workers.dev`）
-2. 使用任意二维码生成工具（如 草料二维码、QR Code Generator）
-3. 将链接转换为二维码并下载
-
-### 美化挪车牌
-
-使用 AI 工具生成精美的装饰设计：
-
-- **Nanobanana Pro** - 生成装饰图案和背景
-- **ChatGPT** - 生成创意设计图
-
-制作步骤：
-
-1. 用 AI 工具生成你喜欢的装饰图案
-2. 将二维码与生成的图案组合排版
-3. 添加「扫码通知车主」提示文字
-4. 打印、过塑，贴在车上
-
-> 💡 用 AI 生成独一无二的挪车牌，让你的爱车更有个性！
-
-### 效果展示
-
-![挪车码效果](demo.jpg)
-
-## 安全设置（推荐）
-
-为防止境外恶意攻击，建议只允许中国地区访问：
-
-### 方法一：使用 WAF 规则（推荐）
-
-1. 进入 Cloudflare Dashboard → 你的域名
-2. 左侧菜单点击「Security」→「WAF」
-3. 点击「Create rule」
-4. 规则设置：
-   - Rule name：`Block non-CN traffic`
-   - If incoming requests match：`Country does not equal China`
-   - Then：`Block`
-5. 点击「Deploy」
-
-### 方法二：在 Worker 代码中过滤
-
-在 `movecar.js` 的 `handleRequest` 函数开头添加：
-
-```javascript
-async function handleRequest(request) {
-  const country = request.cf?.country;
-  if (country && country !== 'CN') {
-    return new Response('Access Denied', { status: 403 });
-  }
-
-  // 下面保持原有逻辑
-}
+```sh
+node build.mjs
+node --test notifications.test.mjs follow-up.test.mjs session.test.mjs
+wrangler pages project create movecar --production-branch main
 ```
 
-> ⚠️ 曾经被境外流量攻击过，强烈建议开启地区限制！
+若 Wrangler 提示新项目被自动转交给 Workers、无法创建 Pages 项目，可按 CLI 提示仅在创建时添加 `--force`。
+
+配置通知和会话凭证，例如使用 PushPlus：
+
+```sh
+wrangler pages secret put PUSHPLUS_TOKEN --project-name movecar
+wrangler pages secret put FOLLOW_UP_SECRET --project-name movecar
+wrangler pages secret put PHONE_NUMBER --project-name movecar
+wrangler pages deploy dist --project-name movecar --branch main
+```
+
+按提示输入值。`FOLLOW_UP_SECRET` 使用自己生成的随机密钥（至少 32 随机字节），不要提交到 Git。当前实现需要同时配置 `PHONE_NUMBER` 才会建立用于刷新恢复的会话；其他渠道及配置见 [部署说明](DEPLOYMENT.md)。
+
+将部署后的 HTTPS 网址写入 NFC 标签的 URL 类型，或生成二维码。使用第三方 DNS 时，可以绑定子域名并添加指向 Pages 项目域名的 CNAME。
+
+> 本 fork 需要先执行 `node build.mjs`；不要直接把 `movecar.js` 粘贴到 Worker 编辑器。保留的 `preview-*.html` 是上游静态界面预览，不代表本版本完整行为。
+
+## 使用边界
+
+这是个人单车使用版本，仍沿用上游按全局键保存车主状态和位置的方式；多位访客同时操作可能互相影响，车主确认接口也尚未实现独立身份认证。不应当作已完成多租户隔离的公共服务。
+
+满一分钟开放的是普通拨号入口，届时请求方能够获知真实号码，并非隐私号转接。推送成功表示服务商接受了请求，不保证手机通知栏一定提醒。
 
 ## License
 
-MIT
-
-
-
+沿用上游 [MIT License](LICENSE)，感谢原作者 [lesnolie](https://github.com/lesnolie)。

@@ -17,6 +17,11 @@ build/
 
 # Cloudflare Wrangler
 .wrangler/
+.dev.vars
+.dev.vars.*
+wrangler.jsonc
+wrangler.toml
+DEPLOYMENT.local.md
 
 # IDE
 .vscode/

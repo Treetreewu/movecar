@@ -1,0 +1,11 @@
+{
+  "name": "movecar",
+  "pages_build_output_dir": "./dist",
+  "compatibility_date": "2026-11-03",
+  "kv_namespaces": [
+    {
+      "binding": "MOVE_CAR_STATUS",
+      "id": "REPLACE_WITH_YOUR_KV_NAMESPACE_ID"
+    }
+  ]
+}
